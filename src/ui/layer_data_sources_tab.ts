@@ -79,6 +79,95 @@ const dataSourceUrlSyntaxHighlighter: SyntaxHighlighter = {
   },
 };
 
+
+function autoResizeTextBox(textBox: HTMLTextAreaElement) {
+  textBox.style.height = "auto";  // reset
+  textBox.style.height = Math.min(textBox.scrollHeight, window.innerHeight * 0.5) + "px";
+}
+
+
+// async function analyzeUrl(url: string): Promise<string> {
+//   try {
+//     // Step 1: Trim everything after ".zarr"
+//     const zarrIndex = url.indexOf(".zarr");
+//     if (zarrIndex === -1) return "No metadata";
+
+//     const trimmed = url.slice(0, zarrIndex + ".zarr".length);
+
+//     // Step 2: Extract the 3-digit channel from the zarr file name
+//     const parts = trimmed.split("/");
+//     if (parts.length < 1) return "No metadata";
+
+//     const zarrName = parts[parts.length - 1];
+//     const channelMatch = zarrName.match(/^(\d{3})/);
+//     if (!channelMatch) return "No metadata";
+
+//     const channel = channelMatch[1];
+
+//     // Step 3: Remove filename and go two levels up
+//     if (parts.length < 3) return "No metadata";
+//     const basePath = parts.slice(0, -2).join("/");
+
+//     // Step 4: Construct config URL
+//     const configUrl = `${basePath}/analysis_config.json`;
+
+//     // Step 5: Fetch the JSON
+//     const response = await fetch(configUrl);
+//     if (!response.ok) return `No metadata`;
+
+//     const json = await response.json();
+
+//     // Step 6: Return the subdictionary for the channel or a not found message
+//     if (json[channel]) {
+//       return JSON.stringify(json[channel], null, 2); // pretty print subdictionary
+//     } else {
+//       return `Channel ${channel} not found in config`;
+//     }
+//   } catch (err: any) {
+//     return `Error analyzing URL: ${err.message}`;
+//   }
+// }
+
+async function analyzeUrl(url: string): Promise<string> {
+  try {
+    // Step 1: Trim everything after ".zarr"
+    const zarrIndex = url.indexOf(".zarr");
+    if (zarrIndex === -1) return "No metadata";
+
+    const trimmed = url.slice(0, zarrIndex + ".zarr".length);
+    const parts = trimmed.split("/");
+
+    // Extract 3-digit channel from filename
+    const zarrName = parts[parts.length - 1];
+    const channelMatch = zarrName.match(/^(\d{3})/);
+    if (!channelMatch) return "No metadata";//"Metadata\nCould not extract 3-digit channel";
+
+    const channel = channelMatch[1];
+
+    // Go two levels up and build config URL
+    const basePath = parts.slice(0, -2).join("/");
+    const configUrl = `${basePath}/analysis_config.json`;
+
+    // Fetch and parse JSON
+    const response = await fetch(configUrl);
+    if (!response.ok) return `No metadata`; //#`Metadata\nFailed to fetch config: ${response.statusText}`;
+
+    const json = await response.json();
+    const channelData = json[channel];
+    if (!channelData) return `No metadata`; //`Metadata\nChannel ${channel} not found`;
+
+    // Extract values. We'll have to update this when there become more values that we want to show.
+    const probeId = channelData.probe_id ?? "N/A";
+    const labels = channelData.labels ? channelData.labels.join(", ") : "N/A";
+
+    // Build final plain-text output
+    return `Channel: ${channel}\nprobe_id: ${probeId}\nlabels: ${labels}`;
+  } catch (err: any) {
+    return `No metadata`; //`Metadata\nError: ${err.message}`;
+  }
+}
+
+
 class SourceUrlAutocomplete extends AutocompleteTextInput {
   dataSourceView: DataSourceView;
   dirty: WatchableValueInterface<boolean>;
@@ -468,6 +557,27 @@ export class LayerDataSourcesTab extends Tab {
     ));
     this.registerDisposer(layer.dataSourcesChanged.add(reRender));
     this.registerDisposer(this.visibility.changed.add(reRender));
+
+
+    // Create a debug text box to show current data source URLs
+    const debugTextBox = document.createElement("textarea");
+    debugTextBox.style.backgroundColor = "#000";
+    debugTextBox.style.color = "#fff";
+    debugTextBox.style.border = "1px solid #ccc";
+    debugTextBox.style.padding = "4px";
+    debugTextBox.style.fontFamily = "monospace";
+    debugTextBox.style.resize = "none";
+    debugTextBox.style.overflowY = "auto";
+    debugTextBox.style.width = "100%";
+    debugTextBox.style.boxSizing = "border-box";
+    debugTextBox.style.maxHeight = "50vh";  // no more than half the panel height
+    debugTextBox.readOnly = true;
+    element.appendChild(debugTextBox);
+
+
+    // Save a reference to it
+    (this as any).debugTextBox = debugTextBox;
+
     this.updateView();
   }
 
@@ -552,6 +662,22 @@ export class LayerDataSourcesTab extends Tab {
       }
     }
     this.updateLayerTypeDetection();
+    // Update debug text box with current URLs
+    const debugBox = (this as any).debugTextBox as HTMLTextAreaElement | undefined;
+    if (debugBox) {
+      const urls = this.layer.dataSources.map(ds => ds.spec.url);
+      const url = urls[0] || "";
+
+      // Await the result
+      // const analysisText = analyzeUrl(url);
+      analyzeUrl(url).then(analysisText => {
+        debugBox.value = analysisText;
+        autoResizeTextBox(debugBox);
+      })
+      // debugBox.value = analysisText;
+      // autoResizeTextBox(debugBox);
+    }
+
   }
 }
 
@@ -561,3 +687,20 @@ USER_LAYER_TABS.push({
   order: -100,
   getter: (layer) => new LayerDataSourcesTab(layer),
 });
+
+
+// export class MetadataTab extends Tab {
+//   private sourceViews = new Map<LayerDataSource, DataSourceView>();
+//   constructor(public layer: Borrowed<UserLayer>) {
+//     super();
+//     this.element.classList.add('neuroglancer-metadata-tab');
+//     this.element.textContent = "Metadata content goes here";
+//   }
+// }
+
+// USER_LAYER_TABS.push({
+//   id: "metadata",
+//   label: "Metadata",
+//   order: -99,
+//   getter: (layer) => new MetadataTab(layer),
+// });
