@@ -156,12 +156,16 @@ async function analyzeUrl(url: string): Promise<string> {
     const channelData = json[channel];
     if (!channelData) return `No metadata`; //`Metadata\nChannel ${channel} not found`;
 
+    // We want to get the overall sample data
+    const lct_sample_id = json["sample_id"] ?? "N/A";
+    const customer_sample_id = json["customer_sample_id"] ?? "N/A";
+
     // Extract values. We'll have to update this when there become more values that we want to show.
     const probeId = channelData.probe_id ?? "N/A";
     const labels = channelData.labels ? channelData.labels.join(", ") : "N/A";
 
     // Build final plain-text output
-    return `Channel: ${channel}\nprobe_id: ${probeId}\nlabels: ${labels}`;
+    return `lct_sample_id: ${lct_sample_id}\ncustomer_sample_id: ${customer_sample_id}\nchannel: ${channel}\nprobe_id: ${probeId}\nlabels: ${labels}`;
   } catch (err: any) {
     return `No metadata`; //`Metadata\nError: ${err.message}`;
   }
