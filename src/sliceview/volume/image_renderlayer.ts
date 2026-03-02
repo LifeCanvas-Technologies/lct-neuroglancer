@@ -40,9 +40,10 @@ import {
   setControlsInShader,
 } from "#src/webgl/shader_ui_controls.js";
 
-const DEFAULT_FRAGMENT_MAIN = `#uicontrol invlerp normalized
+const DEFAULT_FRAGMENT_MAIN = `#uicontrol vec3 color color(default="#ffffff")
+#uicontrol invlerp normalized
 void main() {
-  emitGrayscale(normalized());
+  emitRGB(color * vec3(normalized()));
 }
 `;
 
