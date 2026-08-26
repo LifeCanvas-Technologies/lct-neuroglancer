@@ -22,6 +22,7 @@ import svg_controls_alt from "ikonate/icons/controls-alt.svg?raw";
 import svg_layers from "ikonate/icons/layers.svg?raw";
 import svg_list from "ikonate/icons/list.svg?raw";
 import svg_settings from "ikonate/icons/settings.svg?raw";
+import svg_table_horizontal from "ikonate/icons/table-horizontal.svg?raw";
 import { debounce } from "lodash-es";
 import {
   makeCoordinateSpace,
@@ -166,6 +167,7 @@ export const VIEWER_TOP_ROW_CONFIG_OPTIONS = [
   "showScreenshotButton",
   "showToolPaletteButton",
   "showLayerListPanelButton",
+  "showLayerPanelButton",
   "showSelectionPanelButton",
   "showLayerSidePanelButton",
   "showLocation",
@@ -795,6 +797,24 @@ export class Viewer extends RefCounted implements ViewerState {
       this.registerDisposer(
         new ElementVisibilityFromTrackableBoolean(
           this.uiControlVisibility.showLayerListPanelButton,
+          button.element,
+        ),
+      );
+      topRow.appendChild(button.element);
+    }
+
+    {
+      const button = this.registerDisposer(
+        new CheckboxIcon(this.uiConfiguration.showLayerPanel, {
+          svg: svg_table_horizontal,
+          backgroundScheme: "dark",
+          enableTitle: "Show layer tab bar",
+          disableTitle: "Hide layer tab bar",
+        }),
+      );
+      this.registerDisposer(
+        new ElementVisibilityFromTrackableBoolean(
+          this.uiControlVisibility.showLayerPanelButton,
           button.element,
         ),
       );
