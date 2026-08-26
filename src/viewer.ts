@@ -195,7 +195,10 @@ export type ViewerUIConfiguration = {
 
 export function makeViewerUIConfiguration(): ViewerUIConfiguration {
   return Object.fromEntries(
-    VIEWER_UI_CONFIG_OPTIONS.map((key) => [key, new TrackableBoolean(true)]),
+    VIEWER_UI_CONFIG_OPTIONS.map((key) => [
+      key,
+      new TrackableBoolean(key !== "showLayerPanel"),
+    ]),
   ) as ViewerUIConfiguration;
 }
 

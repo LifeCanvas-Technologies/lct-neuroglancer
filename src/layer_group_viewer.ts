@@ -28,7 +28,7 @@ import type {
   MouseSelectionState,
   SelectedLayerState,
 } from "#src/layer/index.js";
-import { LayerSubsetSpecification } from "#src/layer/index.js";
+import { addNewLayer, LayerSubsetSpecification } from "#src/layer/index.js";
 import type {
   CoordinateSpacePlaybackVelocity,
   TrackableCrossSectionZoom,
@@ -475,9 +475,7 @@ export class LayerGroupViewer extends RefCounted {
 
   private registerActionBindings() {
     this.bindAction("add-layer", () => {
-      if (this.layerPanel) {
-        this.layerPanel.addLayerMenu();
-      }
+      addNewLayer(this.layerSpecification, this.selectedLayer);
     });
     this.bindAction("t-", () => {
       this.navigationState.pose.translateNonDisplayDimension(0, -1);

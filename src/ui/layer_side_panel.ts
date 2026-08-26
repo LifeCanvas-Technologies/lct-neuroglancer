@@ -74,7 +74,6 @@ export class LayerNameWidget extends RefCounted {
       event.stopPropagation();
       event.preventDefault();
     });
-    element.title = "Rename layer";
     this.registerDisposer(layer.layerChanged.add(() => this.updateView()));
     element.addEventListener("change", () => this.updateModel());
     element.addEventListener("blur", () => this.updateModel());
@@ -83,6 +82,7 @@ export class LayerNameWidget extends RefCounted {
 
   private updateView() {
     this.element.value = this.layer.name;
+    this.element.title = this.layer.name;
   }
 
   private updateModel() {

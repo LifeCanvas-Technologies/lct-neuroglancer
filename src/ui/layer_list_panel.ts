@@ -18,12 +18,13 @@ import "#src/ui/layer_list_panel.css";
 import svg_controls_alt from "ikonate/icons/controls-alt.svg?raw";
 import svg_eye_crossed from "ikonate/icons/eye-crossed.svg?raw";
 import svg_eye from "ikonate/icons/eye.svg?raw";
+import svg_plus from "ikonate/icons/plus.svg?raw";
 import type {
   LayerManager,
   ManagedUserLayer,
   TopLevelLayerListSpecification,
 } from "#src/layer/index.js";
-import { deleteLayer } from "#src/layer/index.js";
+import { addNewLayer, deleteLayer } from "#src/layer/index.js";
 import { TrackableBooleanCheckbox } from "#src/trackable_boolean.js";
 import type { DropLayers } from "#src/ui/layer_drag_and_drop.js";
 import {
@@ -53,6 +54,7 @@ const DEFAULT_LAYER_LIST_PANEL_LOCATION: SidePanelLocation = {
   ...DEFAULT_SIDE_PANEL_LOCATION,
   side: "left",
   row: 0,
+  visible: true,
 };
 
 export class LayerListPanelState implements Trackable {
@@ -238,8 +240,16 @@ export class LayerListPanel extends SidePanel {
   ) {
     super(sidePanelManager, state.location);
     const { itemContainer, layerDropZone } = this;
-    const { titleElement } = this.addTitleBar({ title: "" });
+    const { titleBar, titleElement } = this.addTitleBar({ title: "" });
     this.titleElement = titleElement!;
+    const addButton = makeIcon({
+      svg: svg_plus,
+      title: "Add layer",
+      onClick: () => {
+        addNewLayer(this.manager, this.selectedLayer);
+      },
+    });
+    titleBar.appendChild(addButton);
     itemContainer.classList.add("neuroglancer-layer-list-panel-items");
     this.addBody(itemContainer);
     layerDropZone.style.flex = "1";
