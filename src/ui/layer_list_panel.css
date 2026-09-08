@@ -56,6 +56,16 @@
   margin-left: 4px;
 }
 
+.neuroglancer-layer-list-panel-item-value {
+  font-family: monospace;
+  font-size: medium;
+  max-width: 50ch;
+  margin-left: 1ch;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .neuroglancer-layer-list-panel-item:hover {
   background-color: #333;
 }

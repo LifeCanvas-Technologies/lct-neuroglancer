@@ -149,6 +149,12 @@ export abstract class LegacyTool<
   abstract trigger(mouseState: MouseSelectionState): void;
   abstract toJSON(): any;
   deactivate(): void {}
+  /**
+   * Completes whatever multi-step placement the tool currently has in
+   * progress (e.g. closing a polygon), without requiring the precise click
+   * that would otherwise do so. No-op by default.
+   */
+  finish(): void {}
   abstract description: string;
   unbind() {
     const { layer } = this;

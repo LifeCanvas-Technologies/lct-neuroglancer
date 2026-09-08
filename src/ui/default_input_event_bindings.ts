@@ -44,6 +44,7 @@ export function getDefaultGlobalBindings() {
 
     map.set("keyn", "add-layer");
     map.set("keyh", "help");
+    map.set("control+keyz", "annotate-undo");
 
     map.set("space", "toggle-layout");
     map.set("shift+space", "toggle-layout-alternative");
@@ -91,6 +92,8 @@ export function getDefaultRenderedDataPanelBindings() {
         bracketleft: "t-",
         bracketright: "t+",
         keyz: "snap",
+        enter: "annotate-finish",
+        escape: "annotate-cancel",
         "control+equal": "zoom-in",
         "alt+equal": "depth-range-decrease",
         "control+shift+equal": "zoom-in",
@@ -115,6 +118,7 @@ export function getDefaultRenderedDataPanelBindings() {
         "at:control+mousedown0": "annotate",
         "at:mousedown2": "move-to-mouse-position",
         "at:alt+mousedown0": "move-annotation",
+        "at:control+alt+mousedown0": "insert-annotation-point",
         "at:control+alt+mousedown2": "delete-annotation",
         "at:touchpinch": "zoom-via-touchpinch",
         "at:touchrotate": "rotate-in-plane-via-touchrotate",

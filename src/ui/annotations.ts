@@ -48,6 +48,7 @@ import {
   SpatiallyIndexedPerspectiveViewAnnotationLayer,
   SpatiallyIndexedSliceViewAnnotationLayer,
 } from "#src/annotation/renderlayer.js";
+import { pushAnnotationUndoRecord } from "#src/annotation/undo.js";
 import type { CoordinateSpace } from "#src/coordinate_transform.js";
 import type { MouseSelectionState, UserLayer } from "#src/layer/index.js";
 import type { LoadedDataSubsource } from "#src/layer/layer_data_source.js";
@@ -461,6 +462,15 @@ export class AnnotationLayerView extends Tab {
       },
     });
     mutableControls.appendChild(lineButton);
+
+    const polygonButton = makeIcon({
+      text: "⬡",
+      title: "Annotate polygon",
+      onClick: () => {
+        this.layer.tool.value = new PlacePolygonTool(this.layer, {});
+      },
+    });
+    mutableControls.appendChild(polygonButton);
 
     const ellipsoidButton = makeIcon({
       text: annotationTypeHandlers[AnnotationType.ELLIPSOID].icon,
@@ -1039,6 +1049,11 @@ const ANNOTATE_POINT_TOOL_ID = "annotatePoint";
 const ANNOTATE_LINE_TOOL_ID = "annotateLine";
 const ANNOTATE_BOUNDING_BOX_TOOL_ID = "annotateBoundingBox";
 const ANNOTATE_ELLIPSOID_TOOL_ID = "annotateSphere";
+const ANNOTATE_POLYGON_TOOL_ID = "annotatePolygon";
+
+// Mirrors the (unexported) `ENDPOINTS_PICK_OFFSET` for `pointA` from
+// src/annotation/line.ts's pick-ID layout: a line's own start point.
+const LINE_POINT_A_PICK_OFFSET = 1;
 
 export class PlacePointTool extends PlaceAnnotationTool {
   trigger(mouseState: MouseSelectionState) {
@@ -1316,6 +1331,193 @@ export class PlaceLineTool extends PlaceTwoCornerAnnotationTool {
 }
 PlaceLineTool.prototype.annotationType = AnnotationType.LINE;
 
+/**
+ * Draws a closed polygon as a chain of `Line` annotations, one per edge,
+ * sharing vertices. Click to place each vertex; click back on the start
+ * vertex to close the loop and commit the whole polygon. Reuses the existing
+ * line rendering/picking/editing machinery entirely - there is no dedicated
+ * "polygon" annotation type. Editing a shared vertex afterwards is handled by
+ * the "move-annotation" action in rendered_data_panel.ts, which drags every
+ * line endpoint coincident with the one grabbed.
+ */
+export class PlacePolygonTool extends PlaceAnnotationTool {
+  get description() {
+    return "annotate polygon";
+  }
+
+  private inProgressPolygon:
+    | {
+        annotationLayer: AnnotationLayerState;
+        startPoint: Float32Array;
+        edges: AnnotationReference[];
+        disposer: () => void;
+      }
+    | undefined;
+
+  private updateLastEdge(mouseState: MouseSelectionState) {
+    const state = this.inProgressPolygon;
+    if (state === undefined) return;
+    const { annotationLayer, edges } = state;
+    const point = getMousePositionInAnnotationCoordinates(
+      mouseState,
+      annotationLayer,
+    );
+    if (point === undefined) return;
+    const reference = edges[edges.length - 1];
+    const oldAnnotation = reference.value as Line;
+    const newAnnotation: Line = { ...oldAnnotation, pointB: point };
+    if (
+      JSON.stringify(
+        annotationToJson(newAnnotation, annotationLayer.source),
+      ) ===
+      JSON.stringify(annotationToJson(oldAnnotation, annotationLayer.source))
+    ) {
+      return;
+    }
+    annotationLayer.source.update(reference, newAnnotation);
+    this.layer.selectAnnotation(annotationLayer, reference.id, true);
+  }
+
+  trigger(mouseState: MouseSelectionState) {
+    const { annotationLayer } = this;
+    if (annotationLayer === undefined) {
+      // Not yet ready.
+      return;
+    }
+    if (!mouseState.updateUnconditionally()) return;
+    const state = this.inProgressPolygon;
+
+    if (state !== undefined) {
+      // At least 3 vertices (2 committed edges plus the live one) must exist
+      // before the loop can be closed into a valid triangle-or-larger polygon.
+      const closesLoop =
+        state.edges.length > 2 &&
+        mouseState.pickedAnnotationLayer === annotationLayer &&
+        mouseState.pickedAnnotationId === state.edges[0].id &&
+        mouseState.pickedOffset === LINE_POINT_A_PICK_OFFSET;
+      if (closesLoop) {
+        this.finish();
+        return;
+      }
+    }
+
+    const point = getMousePositionInAnnotationCoordinates(
+      mouseState,
+      annotationLayer,
+    );
+    if (point === undefined) return;
+
+    if (state === undefined) {
+      // First click: start the polygon with a single degenerate edge that
+      // tracks the mouse until the next click.
+      const initial: Line = {
+        id: "",
+        type: AnnotationType.LINE,
+        description: "",
+        pointA: point,
+        pointB: point,
+        properties: annotationLayer.source.properties.map((x) => x.default),
+      };
+      const reference = annotationLayer.source.add(
+        initial,
+        /*commit=*/ false,
+      );
+      this.layer.selectAnnotation(annotationLayer, reference.id, true);
+      const edges = [reference];
+      const mouseDisposer = mouseState.changed.add(() =>
+        this.updateLastEdge(mouseState),
+      );
+      const disposer = () => {
+        mouseDisposer();
+        for (const edgeRef of edges) edgeRef.dispose();
+      };
+      this.inProgressPolygon = {
+        annotationLayer,
+        startPoint: point,
+        edges,
+        disposer,
+      };
+      return;
+    }
+
+    // Regular click: seal the current edge at this point, then start the
+    // next edge from here.
+    const lastReference = state.edges[state.edges.length - 1];
+    const lastAnnotation = lastReference.value as Line;
+    annotationLayer.source.update(lastReference, {
+      ...lastAnnotation,
+      pointB: point,
+    });
+    const nextAnnotation: Line = {
+      id: "",
+      type: AnnotationType.LINE,
+      description: "",
+      pointA: point,
+      pointB: point,
+      properties: annotationLayer.source.properties.map((x) => x.default),
+    };
+    const nextReference = annotationLayer.source.add(
+      nextAnnotation,
+      /*commit=*/ false,
+    );
+    this.layer.selectAnnotation(annotationLayer, nextReference.id, true);
+    state.edges.push(nextReference);
+  }
+
+  disposed() {
+    this.deactivate();
+    super.disposed();
+  }
+
+  deactivate() {
+    const state = this.inProgressPolygon;
+    if (state !== undefined) {
+      for (const edgeRef of state.edges) {
+        state.annotationLayer.source.delete(edgeRef);
+      }
+      state.disposer();
+      this.inProgressPolygon = undefined;
+    }
+  }
+
+  /**
+   * Closes the loop back to the start vertex and commits the polygon, as if
+   * the user had clicked exactly on the start vertex. Lets a keyboard
+   * shortcut finish a polygon without requiring that precise click. If fewer
+   * than 3 vertices have been placed, there is no valid polygon to close, so
+   * this cancels the in-progress shape instead.
+   */
+  finish() {
+    const state = this.inProgressPolygon;
+    if (state === undefined) return;
+    if (state.edges.length < 3) {
+      this.deactivate();
+      return;
+    }
+    const { annotationLayer, edges } = state;
+    const reference = edges[edges.length - 1];
+    const oldAnnotation = reference.value as Line;
+    annotationLayer.source.update(reference, {
+      ...oldAnnotation,
+      pointB: state.startPoint,
+    });
+    for (const edgeRef of edges) {
+      annotationLayer.source.commit(edgeRef);
+    }
+    pushAnnotationUndoRecord({
+      source: annotationLayer.source,
+      entries: edges.map((edgeRef) => ({ id: edgeRef.id, previous: null })),
+    });
+    this.layer.selectAnnotation(annotationLayer, reference.id, true);
+    state.disposer();
+    this.inProgressPolygon = undefined;
+  }
+
+  toJSON() {
+    return ANNOTATE_POLYGON_TOOL_ID;
+  }
+}
+
 class PlaceEllipsoidTool extends TwoStepAnnotationTool {
   getInitialAnnotation(
     mouseState: MouseSelectionState,
@@ -1385,6 +1587,11 @@ registerLegacyTool(
   ANNOTATE_ELLIPSOID_TOOL_ID,
   (layer, options) =>
     new PlaceEllipsoidTool(<UserLayerWithAnnotations>layer, options),
+);
+registerLegacyTool(
+  ANNOTATE_POLYGON_TOOL_ID,
+  (layer, options) =>
+    new PlacePolygonTool(<UserLayerWithAnnotations>layer, options),
 );
 
 const newRelatedSegmentKeyMap = EventActionMap.fromObject({

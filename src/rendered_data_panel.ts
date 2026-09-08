@@ -17,16 +17,28 @@
 import "#src/rendered_data_panel.css";
 import "#src/noselect.css";
 
-import type { Annotation } from "#src/annotation/index.js";
+import type { AnnotationLayerState } from "#src/annotation/annotation_layer_state.js";
+import type {
+  Annotation,
+  AnnotationReference,
+  Line,
+} from "#src/annotation/index.js";
+import { AnnotationType } from "#src/annotation/index.js";
 import { getAnnotationTypeRenderHandler } from "#src/annotation/type_handler.js";
+import {
+  pushAnnotationUndoRecord,
+  type AnnotationUndoEntry,
+} from "#src/annotation/undo.js";
 import type { DisplayContext } from "#src/display_context.js";
 import { RenderedPanel } from "#src/display_context.js";
 import type { NavigationState } from "#src/navigation_state.js";
 import { PickIDManager } from "#src/object_picking.js";
 import {
   displayToLayerCoordinates,
+  getChunkPositionFromCombinedGlobalLocalPositions,
   layerToDisplayCoordinates,
 } from "#src/render_coordinate_transform.js";
+import { arraysEqual } from "#src/util/array.js";
 import { AutomaticallyFocusedElement } from "#src/util/automatic_focus.js";
 import type { Borrowed } from "#src/util/disposable.js";
 import type {
@@ -50,6 +62,34 @@ import type { ViewerState } from "#src/viewer_state.js";
 declare let NEUROGLANCER_SHOW_OBJECT_SELECTION_TOOLTIP: boolean | undefined;
 
 const tempVec3 = vec3.create();
+
+/**
+ * Converts a position in global/local model coordinates (e.g.
+ * `mouseState.position`) to the "chunk" coordinates used by an annotation
+ * layer's own `Annotation` geometry (e.g. `Line.pointA`).
+ */
+function getAnnotationChunkPosition(
+  annotationLayer: AnnotationLayerState,
+  globalPosition: Float32Array,
+): Float32Array | undefined {
+  const chunkTransform = annotationLayer.chunkTransform.value;
+  if (chunkTransform.error !== undefined) return undefined;
+  const chunkPosition = new Float32Array(
+    chunkTransform.modelTransform.unpaddedRank,
+  );
+  if (
+    !getChunkPositionFromCombinedGlobalLocalPositions(
+      chunkPosition,
+      globalPosition,
+      annotationLayer.localPosition.value,
+      chunkTransform.layerRank,
+      chunkTransform.combinedGlobalLocalToChunkTransform,
+    )
+  ) {
+    return undefined;
+  }
+  return chunkPosition;
+}
 
 export interface RenderedDataViewerState extends ViewerState {
   inputEventMap: EventActionMap;
@@ -651,13 +691,26 @@ export abstract class RenderedDataPanel extends RenderedPanel {
           !annotationLayer.source.readonly &&
           selectedAnnotationId !== undefined
         ) {
+          const pickedOffset = mouseState.pickedOffset;
+
+          // Grabbing the body of an edge (`pickedOffset === 0`) is easy to
+          // do by mistake instead of hitting one of its (small) endpoints,
+          // and translating just that one edge tears it free of its
+          // neighbors. Rather than guess what the user meant, do nothing -
+          // only dragging an actual endpoint (see below) edits a line.
+          if (
+            mouseState.pickedAnnotationType === AnnotationType.LINE &&
+            pickedOffset === 0
+          ) {
+            return;
+          }
+
           e.stopPropagation();
           const annotationRef =
             annotationLayer.source.getReference(selectedAnnotationId)!;
           const ann = <Annotation>annotationRef.value;
 
           const handler = getAnnotationTypeRenderHandler(ann.type);
-          const pickedOffset = mouseState.pickedOffset;
           const {
             chunkTransform: { value: chunkTransform },
           } = annotationLayer;
@@ -669,6 +722,42 @@ export abstract class RenderedDataPanel extends RenderedPanel {
             ann,
             mouseState.pickedOffset,
           );
+
+          // Dragging a single line endpoint also drags any other line
+          // endpoint that exactly coincides with it, so two connected edges
+          // reshape together at a shared vertex (see PlacePolygonTool, which
+          // builds a hand-drawn polygon as a chain of `Line` annotations
+          // sharing vertices).
+          const linkedEndpoints: {
+            ref: AnnotationReference;
+            key: "pointA" | "pointB";
+          }[] = [];
+          if (ann.type === AnnotationType.LINE) {
+            for (const other of annotationLayer.source) {
+              if (other.id === ann.id || other.type !== AnnotationType.LINE) {
+                continue;
+              }
+              const otherLine = other as Line;
+              for (const key of ["pointA", "pointB"] as const) {
+                if (arraysEqual(otherLine[key], repPoint)) {
+                  linkedEndpoints.push({
+                    ref: annotationLayer.source.getReference(other.id),
+                    key,
+                  });
+                }
+              }
+            }
+          }
+
+          // Snapshot the "before" state of everything this gesture will
+          // touch, as a single undo step.
+          const undoEntries: AnnotationUndoEntry[] = [
+            { id: ann.id, previous: ann },
+          ];
+          for (const { ref } of linkedEndpoints) {
+            undoEntries.push({ id: ref.id, previous: ref.value as Annotation });
+          }
+
           const totDeltaVec = vec2.set(vec2.create(), 0, 0);
           if (mouseState.updateUnconditionally()) {
             startRelativeMouseDrag(
@@ -718,13 +807,86 @@ export abstract class RenderedDataPanel extends RenderedPanel {
                   pickedOffset,
                 );
                 annotationLayer.source.update(annotationRef, newAnnotation);
+                for (const { ref, key } of linkedEndpoints) {
+                  annotationLayer.source.update(ref, {
+                    ...(ref.value as Line),
+                    [key]: new Float32Array(newPoint),
+                  });
+                }
               },
               (_event) => {
                 annotationLayer.source.commit(annotationRef);
                 annotationRef.dispose();
+                for (const { ref } of linkedEndpoints) {
+                  annotationLayer.source.commit(ref);
+                  ref.dispose();
+                }
+                pushAnnotationUndoRecord({
+                  source: annotationLayer.source,
+                  entries: undoEntries,
+                });
               },
             );
           }
+        }
+      },
+    );
+
+    registerActionListener(
+      element,
+      "insert-annotation-point",
+      (e: ActionEvent<MouseEvent>) => {
+        const { mouseState } = this.viewer;
+        const annotationLayer = mouseState.pickedAnnotationLayer;
+        const selectedAnnotationId = mouseState.pickedAnnotationId;
+        if (
+          annotationLayer === undefined ||
+          annotationLayer.source.readonly ||
+          selectedAnnotationId === undefined ||
+          mouseState.pickedAnnotationType !== AnnotationType.LINE ||
+          // Only inserting into the body of an edge makes sense; clicking an
+          // existing endpoint (pickedOffset !== 0) would just duplicate it.
+          mouseState.pickedOffset !== 0
+        ) {
+          return;
+        }
+        e.stopPropagation();
+        if (!mouseState.updateUnconditionally()) return;
+        const splitPoint = getAnnotationChunkPosition(
+          annotationLayer,
+          mouseState.position,
+        );
+        if (splitPoint === undefined) return;
+        const ref = annotationLayer.source.getReference(selectedAnnotationId);
+        try {
+          const line = ref.value as Line;
+          annotationLayer.source.delete(ref);
+          const firstHalf: Line = { ...line, id: "", pointB: splitPoint };
+          const secondHalf: Line = {
+            ...line,
+            id: "",
+            pointA: new Float32Array(splitPoint),
+          };
+          const firstRef = annotationLayer.source.add(
+            firstHalf,
+            /*commit=*/ true,
+          );
+          const secondRef = annotationLayer.source.add(
+            secondHalf,
+            /*commit=*/ true,
+          );
+          pushAnnotationUndoRecord({
+            source: annotationLayer.source,
+            entries: [
+              { id: firstRef.id, previous: null },
+              { id: secondRef.id, previous: null },
+              { id: line.id, previous: line },
+            ],
+          });
+          firstRef.dispose();
+          secondRef.dispose();
+        } finally {
+          ref.dispose();
         }
       },
     );
@@ -740,7 +902,12 @@ export abstract class RenderedDataPanel extends RenderedPanel {
       ) {
         const ref = annotationLayer.source.getReference(selectedAnnotationId);
         try {
+          const deleted = ref.value as Annotation;
           annotationLayer.source.delete(ref);
+          pushAnnotationUndoRecord({
+            source: annotationLayer.source,
+            entries: [{ id: deleted.id, previous: deleted }],
+          });
         } finally {
           ref.dispose();
         }

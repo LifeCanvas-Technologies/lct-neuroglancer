@@ -24,8 +24,9 @@ import type {
   ManagedUserLayer,
   TopLevelLayerListSpecification,
 } from "#src/layer/index.js";
-import { addNewLayer, deleteLayer } from "#src/layer/index.js";
+import { addNewLayer, deleteLayer, makeLayer } from "#src/layer/index.js";
 import { TrackableBooleanCheckbox } from "#src/trackable_boolean.js";
+import type { WatchableValueInterface } from "#src/trackable_value.js";
 import type { DropLayers } from "#src/ui/layer_drag_and_drop.js";
 import {
   registerLayerBarDragLeaveHandler,
@@ -139,6 +140,7 @@ function makeSelectedLayerSidePanelCheckboxIcon(layer: ManagedUserLayer) {
 class LayerListItem extends RefCounted {
   element = document.createElement("div");
   numberElement = document.createElement("div");
+  valueElement = document.createElement("div");
   generation = -1;
   constructor(
     public panel: LayerListPanel,
@@ -178,6 +180,12 @@ class LayerListItem extends RefCounted {
     );
     element.appendChild(new LayerTypeIndicatorWidget(layer).element);
     element.appendChild(layerNameWidget.element);
+    const { valueElement } = this;
+    valueElement.classList.add("neuroglancer-layer-list-panel-item-value");
+    valueElement.style.display = panel.showLayerHoverValues.value
+      ? ""
+      : "none";
+    element.appendChild(valueElement);
     element.appendChild(
       this.registerDisposer(makeSelectedLayerSidePanelCheckboxIcon(layer))
         .element,
@@ -237,6 +245,7 @@ export class LayerListPanel extends SidePanel {
     sidePanelManager: SidePanelManager,
     public manager: TopLevelLayerListSpecification,
     public state: LayerListPanelState,
+    public showLayerHoverValues: WatchableValueInterface<boolean>,
   ) {
     super(sidePanelManager, state.location);
     const { itemContainer, layerDropZone } = this;
@@ -244,11 +253,24 @@ export class LayerListPanel extends SidePanel {
     this.titleElement = titleElement!;
     const addButton = makeIcon({
       svg: svg_plus,
-      title: "Add layer",
-      onClick: () => {
-        addNewLayer(this.manager, this.selectedLayer);
-      },
+      title:
+        "Click to add layer, control+click/right click/⌘+click to add local annotation layer.",
     });
+    const addLayer = (event: MouseEvent) => {
+      if (event.ctrlKey || event.metaKey || event.type === "contextmenu") {
+        const layer = makeLayer(this.manager, "annotation", {
+          type: "annotation",
+          source: "local://annotations",
+        });
+        this.manager.add(layer);
+        this.selectedLayer.layer = layer;
+        this.selectedLayer.visible = true;
+      } else {
+        addNewLayer(this.manager, this.selectedLayer);
+      }
+    };
+    this.registerEventListener(addButton, "click", addLayer);
+    this.registerEventListener(addButton, "contextmenu", addLayer);
     titleBar.appendChild(addButton);
     itemContainer.classList.add("neuroglancer-layer-list-panel-items");
     this.addBody(itemContainer);
@@ -261,6 +283,15 @@ export class LayerListPanel extends SidePanel {
       this.layerManager.layersChanged.add(debouncedUpdateView),
     );
     this.registerDisposer(this.selectedLayer.changed.add(debouncedUpdateView));
+    const scheduleValuesUpdate = this.registerCancellable(
+      animationFrameDebounce(() => this.updateValues()),
+    );
+    this.registerDisposer(
+      this.manager.layerSelectedValues.changed.add(scheduleValuesUpdate),
+    );
+    this.registerDisposer(
+      showLayerHoverValues.changed.add(() => this.updateValuesVisibility()),
+    );
     registerLayerBarDragLeaveHandler(this);
     registerLayerBarDropHandlers(
       this,
@@ -338,6 +369,32 @@ export class LayerListPanel extends SidePanel {
       title += ")";
     }
     this.titleElement.textContent = title;
+  }
+
+  private updateValues() {
+    const { layerSelectedValues } = this.manager;
+    for (const [layer, item] of this.items) {
+      const userLayer = layer.layer;
+      let text = "";
+      if (userLayer !== null) {
+        const state = layerSelectedValues.get(userLayer);
+        if (state !== undefined && state.value !== undefined) {
+          text = "" + state.value;
+        }
+      }
+      item.valueElement.textContent = text;
+      // The text can be long (e.g. a segmentation label), and `max-width`
+      // ellipsis-truncates it visually; a title tooltip still shows it in
+      // full on hover.
+      item.valueElement.title = text;
+    }
+  }
+
+  private updateValuesVisibility() {
+    const show = this.showLayerHoverValues.value;
+    for (const item of this.items.values()) {
+      item.valueElement.style.display = show ? "" : "none";
+    }
   }
 }
 

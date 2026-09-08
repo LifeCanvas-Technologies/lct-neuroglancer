@@ -24,6 +24,7 @@ import svg_list from "ikonate/icons/list.svg?raw";
 import svg_settings from "ikonate/icons/settings.svg?raw";
 import svg_table_horizontal from "ikonate/icons/table-horizontal.svg?raw";
 import { debounce } from "lodash-es";
+import { undoLastAnnotationChange } from "#src/annotation/undo.js";
 import {
   makeCoordinateSpace,
   TrackableCoordinateSpace,
@@ -965,6 +966,7 @@ export class Viewer extends RefCounted implements ViewerState {
             this.sidePanelManager,
             this.layerSpecification,
             this.layerListPanelState,
+            this.uiConfiguration.showLayerHoverValues,
           ),
       }),
     );
@@ -1131,6 +1133,22 @@ export class Viewer extends RefCounted implements ViewerState {
         return;
       }
       userLayer.tool.value.trigger(this.mouseState);
+    });
+
+    this.bindAction("annotate-finish", () => {
+      const userLayer = this.selectedLayer.layer?.layer;
+      userLayer?.tool.value?.finish();
+    });
+
+    this.bindAction("annotate-cancel", () => {
+      const userLayer = this.selectedLayer.layer?.layer;
+      userLayer?.tool.value?.deactivate();
+    });
+
+    this.bindAction("annotate-undo", () => {
+      if (!undoLastAnnotationChange()) {
+        StatusMessage.showTemporaryMessage("Nothing to undo.");
+      }
     });
 
     this.bindAction("toggle-axis-lines", () => this.showAxisLines.toggle());
